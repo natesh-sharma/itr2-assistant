@@ -1,14 +1,12 @@
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, List, Optional, Union
 
+import openpyxl
 import pandas as pd
 
 
 def parse_zerodha_pnl(file: Union[str, BinaryIO]) -> Dict[str, Any]:
-    try:
-        xl = pd.ExcelFile(file)
-    except Exception as e:
-        raise ValueError(f"Failed to read Excel file: {e}") from e
+    wb = openpyxl.load_workbook(file, data_only=True)
 
     equity_stcg: List[Dict] = []
     equity_ltcg: List[Dict] = []
@@ -16,32 +14,34 @@ def parse_zerodha_pnl(file: Union[str, BinaryIO]) -> Dict[str, Any]:
     mf_ltcg_debt: List[Dict] = []
     dividends: List[Dict] = []
 
-    for sheet_name in xl.sheet_names:
-        df = xl.parse(sheet_name, header=None)
-        lower_name = sheet_name.lower()
+    tradewise_sheet = _find_sheet(wb, "Tradewise Exits")
+    if tradewise_sheet:
+        sections = _split_sections(tradewise_sheet)
+        for section_name, rows in sections.items():
+            trades = _parse_trade_rows(rows)
+            name_lower = section_name.lower()
+            if "mutual fund" in name_lower:
+                for t in trades:
+                    scheme = t["symbol"].lower()
+                    if any(kw in scheme for kw in ["liquid", "debt", "money market", "gilt", "bond", "overnight", "ultra short"]):
+                        mf_ltcg_debt.append(t)
+                    else:
+                        mf_ltcg_equity.append(t)
+            elif "short term" in name_lower:
+                equity_stcg.extend(trades)
+            elif "long term" in name_lower:
+                equity_ltcg.extend(trades)
+            elif "intraday" in name_lower or "speculative" in name_lower:
+                equity_stcg.extend(trades)
 
-        if "equity" in lower_name and ("delivery" in lower_name or "stock" in lower_name):
-            stcg, ltcg = _parse_equity_delivery(df)
-            equity_stcg.extend(stcg)
-            equity_ltcg.extend(ltcg)
-        elif "mutual" in lower_name or "mf" in lower_name:
-            eq_mf, debt_mf = _parse_mutual_fund(df)
-            mf_ltcg_equity.extend(eq_mf)
-            mf_ltcg_debt.extend(debt_mf)
-        elif "dividend" in lower_name:
-            dividends.extend(_parse_dividends(df))
-        else:
-            stcg, ltcg = _parse_equity_delivery(df)
-            if stcg or ltcg:
-                equity_stcg.extend(stcg)
-                equity_ltcg.extend(ltcg)
+    div_sheet = _find_sheet(wb, "Dividends")
+    if div_sheet:
+        dividends = _parse_dividend_sheet(div_sheet)
 
-    stcg_total = sum(t["profit"] for t in equity_stcg)
-    ltcg_equity_total = sum(t["profit"] for t in equity_ltcg) + sum(
-        t["profit"] for t in mf_ltcg_equity
-    )
-    ltcg_debt_total = sum(t["profit"] for t in mf_ltcg_debt)
-    dividend_total = sum(d["amount"] for d in dividends)
+    stcg_total = sum(t.get("profit", 0) for t in equity_stcg)
+    ltcg_equity_total = sum(t.get("profit", 0) for t in equity_ltcg) + sum(t.get("profit", 0) for t in mf_ltcg_equity)
+    ltcg_debt_total = sum(t.get("profit", 0) for t in mf_ltcg_debt)
+    dividend_total = sum(d.get("amount", 0) for d in dividends)
 
     return {
         "equity_stcg": equity_stcg,
@@ -58,210 +58,182 @@ def parse_zerodha_pnl(file: Union[str, BinaryIO]) -> Dict[str, Any]:
     }
 
 
-def _find_header_row(df: pd.DataFrame) -> Optional[int]:
-    target_cols = {"symbol", "isin", "trade", "quantity", "buy", "sell"}
-    for idx, row in df.iterrows():
-        row_vals = {str(v).strip().lower() for v in row.values if pd.notna(v)}
-        matches = sum(1 for t in target_cols if any(t in v for v in row_vals))
-        if matches >= 3:
-            return idx
+def _find_sheet(wb, keyword: str):
+    for name in wb.sheetnames:
+        if keyword.lower() in name.lower():
+            return wb[name]
     return None
 
 
-def _parse_equity_delivery(df: pd.DataFrame) -> tuple:
-    stcg: List[Dict] = []
-    ltcg: List[Dict] = []
+def _split_sections(ws) -> Dict[str, List[List]]:
+    sections: Dict[str, List[List]] = {}
+    current_section = None
+    header_row = None
 
-    header_idx = _find_header_row(df)
-    if header_idx is None:
-        return stcg, ltcg
+    for row in ws.iter_rows(values_only=True):
+        vals = [v for v in row if v is not None]
+        if not vals:
+            continue
 
-    headers = [str(v).strip().lower() for v in df.iloc[header_idx]]
-    df_data = df.iloc[header_idx + 1:].copy()
-    df_data.columns = headers
-
-    col_map = _map_columns(headers)
-
-    for _, row in df_data.iterrows():
-        try:
-            trade = _build_trade(row, col_map)
-            if trade is None:
+        non_none = [v for v in row if v is not None and str(v).strip()]
+        if len(non_none) == 1:
+            label = str(non_none[0]).strip()
+            section_markers = ["equity - intraday", "equity - short term", "equity - long term",
+                               "equity - buyback", "mutual funds", "f&o", "currency", "commodity"]
+            if any(m in label.lower() for m in section_markers):
+                current_section = label
+                header_row = None
+                sections[current_section] = []
                 continue
 
-            if trade["holding_days"] > 365:
-                ltcg.append(trade)
+        if current_section is not None:
+            if header_row is None:
+                str_vals = [str(v).lower().strip() for v in row if v is not None]
+                if "symbol" in str_vals:
+                    header_row = [str(v).strip() if v is not None else "" for v in row]
+                    continue
             else:
-                stcg.append(trade)
-        except Exception:
-            continue
+                cell1 = row[1] if len(row) > 1 else None
+                if cell1 is not None and str(cell1).strip() and str(cell1).strip() not in ("Symbol", ""):
+                    sections[current_section].append((header_row, list(row)))
 
-    return stcg, ltcg
+    return sections
 
 
-def _parse_mutual_fund(df: pd.DataFrame) -> tuple:
-    equity_mf: List[Dict] = []
-    debt_mf: List[Dict] = []
+def _parse_trade_rows(rows: List) -> List[Dict]:
+    trades = []
+    if not rows:
+        return trades
 
-    header_idx = _find_header_row(df)
-    if header_idx is None:
-        return equity_mf, debt_mf
-
-    headers = [str(v).strip().lower() for v in df.iloc[header_idx]]
-    df_data = df.iloc[header_idx + 1:].copy()
-    df_data.columns = headers
-
-    col_map = _map_columns(headers)
-
-    for _, row in df_data.iterrows():
+    for header_row, data_row in rows:
         try:
-            trade = _build_trade(row, col_map)
-            if trade is None:
+            col_idx = {h.lower(): i for i, h in enumerate(header_row) if h}
+
+            symbol_i = _find_idx(col_idx, ["symbol", "scrip"])
+            isin_i = _find_idx(col_idx, ["isin"])
+            buy_date_i = _find_idx(col_idx, ["entry date", "buy date"])
+            sell_date_i = _find_idx(col_idx, ["exit date", "sell date"])
+            qty_i = _find_idx(col_idx, ["quantity", "qty"])
+            buy_val_i = _find_idx(col_idx, ["buy value", "buy amount"])
+            sell_val_i = _find_idx(col_idx, ["sell value", "sale value"])
+            profit_i = _find_idx(col_idx, ["profit", "p&l", "realized p&l"])
+            fmv_i = _find_idx(col_idx, ["fair market value", "fmv"])
+            holding_i = _find_idx(col_idx, ["period of holding"])
+
+            symbol = _safe_str(data_row, symbol_i)
+            if not symbol:
                 continue
 
-            scheme_name = str(row.get(col_map.get("symbol", ""), "")).lower()
-            is_debt = any(
-                kw in scheme_name
-                for kw in ["debt", "liquid", "money market", "gilt", "bond", "fixed"]
-            )
-
-            if is_debt:
-                debt_mf.append(trade)
-            else:
-                equity_mf.append(trade)
-        except Exception:
-            continue
-
-    return equity_mf, debt_mf
-
-
-def _parse_dividends(df: pd.DataFrame) -> List[Dict]:
-    divs: List[Dict] = []
-
-    header_idx = None
-    for idx, row in df.iterrows():
-        row_vals = {str(v).strip().lower() for v in row.values if pd.notna(v)}
-        if any("symbol" in v or "scrip" in v for v in row_vals) and any(
-            "amount" in v or "dividend" in v for v in row_vals
-        ):
-            header_idx = idx
-            break
-
-    if header_idx is None:
-        return divs
-
-    headers = [str(v).strip().lower() for v in df.iloc[header_idx]]
-    df_data = df.iloc[header_idx + 1:].copy()
-    df_data.columns = headers
-
-    symbol_col = _find_col(headers, ["symbol", "scrip", "name"])
-    amount_col = _find_col(headers, ["amount", "dividend", "value"])
-    date_col = _find_col(headers, ["date", "ex-date", "ex date", "record"])
-
-    for _, row in df_data.iterrows():
-        try:
-            amount = _to_float(row.get(amount_col))
-            if amount is None or amount == 0:
+            qty = _safe_float(data_row, qty_i)
+            if qty is None or qty == 0:
                 continue
 
-            divs.append({
-                "symbol": str(row.get(symbol_col, "")).strip(),
-                "amount": round(amount, 2),
-                "ex_date": _parse_date(row.get(date_col)),
-            })
+            trade: Dict[str, Any] = {
+                "symbol": symbol,
+                "isin": _safe_str(data_row, isin_i),
+                "buy_date": _safe_date(data_row, buy_date_i),
+                "sell_date": _safe_date(data_row, sell_date_i),
+                "qty": qty,
+                "buy_value": _safe_float(data_row, buy_val_i) or 0,
+                "sell_value": _safe_float(data_row, sell_val_i) or 0,
+                "profit": _safe_float(data_row, profit_i) or 0,
+                "holding_days": int(_safe_float(data_row, holding_i) or 0),
+            }
+
+            fmv = _safe_float(data_row, fmv_i)
+            if fmv is not None:
+                trade["fmv"] = fmv
+
+            trades.append(trade)
         except Exception:
             continue
+
+    return trades
+
+
+def _parse_dividend_sheet(ws) -> List[Dict]:
+    divs = []
+    in_section = False
+    headers = None
+
+    for row in ws.iter_rows(values_only=True):
+        vals = [v for v in row if v is not None]
+        if not vals:
+            continue
+
+        str_vals = [str(v).lower().strip() for v in row if v is not None]
+
+        if "symbol" in str_vals and any("dividend" in v or "amount" in v for v in str_vals):
+            headers = [str(v).strip().lower() if v is not None else "" for v in row]
+            in_section = True
+            continue
+
+        if in_section and headers and row[1] is not None:
+            try:
+                col_idx = {h: i for i, h in enumerate(headers) if h}
+                symbol_i = _find_idx(col_idx, ["symbol", "scrip"])
+                amount_i = _find_idx(col_idx, ["net dividend amount", "dividend amount", "amount"])
+                date_i = _find_idx(col_idx, ["ex-date", "ex date", "date"])
+
+                amount = _safe_float(row, amount_i)
+                if amount is None or amount == 0:
+                    continue
+
+                divs.append({
+                    "symbol": _safe_str(row, symbol_i),
+                    "amount": round(amount, 2),
+                    "ex_date": _safe_date(row, date_i),
+                })
+            except Exception:
+                continue
 
     return divs
 
 
-def _map_columns(headers: List[str]) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-    mapping["symbol"] = _find_col(headers, ["symbol", "scrip", "name", "stock"])
-    mapping["isin"] = _find_col(headers, ["isin"])
-    mapping["buy_date"] = _find_col(headers, ["buy date", "purchase date", "buy_date", "acquisition"])
-    mapping["sell_date"] = _find_col(headers, ["sell date", "sale date", "sell_date", "redemption"])
-    mapping["qty"] = _find_col(headers, ["quantity", "qty", "units"])
-    mapping["buy_value"] = _find_col(headers, ["buy value", "buy_value", "purchase value", "cost", "buy amount"])
-    mapping["sell_value"] = _find_col(headers, ["sell value", "sell_value", "sale value", "sale amount"])
-    mapping["profit"] = _find_col(headers, ["p&l", "pnl", "profit", "gain", "realized"])
-    mapping["fmv"] = _find_col(headers, ["fmv", "fair market", "nav"])
-    return mapping
+def _find_idx(col_idx: Dict[str, int], candidates: List[str]) -> Optional[int]:
+    for c in candidates:
+        for key, idx in col_idx.items():
+            if c in key:
+                return idx
+    return None
 
 
-def _find_col(headers: List[str], candidates: List[str]) -> str:
-    for candidate in candidates:
-        for h in headers:
-            if candidate in h:
-                return h
-    return ""
+def _safe_str(row: list, idx: Optional[int]) -> str:
+    if idx is None or idx >= len(row):
+        return ""
+    val = row[idx]
+    return str(val).strip() if val is not None else ""
 
 
-def _build_trade(row: pd.Series, col_map: Dict[str, str]) -> Optional[Dict]:
-    qty = _to_float(row.get(col_map["qty"]))
-    if qty is None or qty == 0:
+def _safe_float(row: list, idx: Optional[int]) -> Optional[float]:
+    if idx is None or idx >= len(row):
         return None
-
-    buy_value = _to_float(row.get(col_map["buy_value"])) or 0
-    sell_value = _to_float(row.get(col_map["sell_value"])) or 0
-    profit_direct = _to_float(row.get(col_map["profit"]))
-    profit = profit_direct if profit_direct is not None else (sell_value - buy_value)
-
-    buy_date = _parse_date(row.get(col_map["buy_date"]))
-    sell_date = _parse_date(row.get(col_map["sell_date"]))
-
-    holding_days = 0
-    if buy_date and sell_date:
-        try:
-            bd = datetime.strptime(buy_date, "%Y-%m-%d")
-            sd = datetime.strptime(sell_date, "%Y-%m-%d")
-            holding_days = (sd - bd).days
-        except (ValueError, TypeError):
-            pass
-
-    trade: Dict[str, Any] = {
-        "symbol": str(row.get(col_map["symbol"], "")).strip(),
-        "isin": str(row.get(col_map["isin"], "")).strip(),
-        "buy_date": buy_date,
-        "sell_date": sell_date,
-        "qty": int(qty),
-        "buy_value": round(buy_value, 2),
-        "sell_value": round(sell_value, 2),
-        "profit": round(profit, 2),
-        "holding_days": holding_days,
-    }
-
-    fmv = _to_float(row.get(col_map.get("fmv", "")))
-    if fmv is not None:
-        trade["fmv"] = round(fmv, 2)
-
-    return trade
-
-
-def _to_float(val: Any) -> Optional[float]:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    val = row[idx]
+    if val is None:
         return None
     try:
-        cleaned = str(val).replace(",", "").replace("₹", "").strip()
-        if cleaned in ("", "-", "nan", "None"):
-            return None
-        return float(cleaned)
+        return float(val)
     except (ValueError, TypeError):
+        try:
+            return float(str(val).replace(",", "").replace("₹", "").strip())
+        except (ValueError, TypeError):
+            return None
+
+
+def _safe_date(row: list, idx: Optional[int]) -> Optional[str]:
+    if idx is None or idx >= len(row):
         return None
-
-
-def _parse_date(val: Any) -> Optional[str]:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    val = row[idx]
+    if val is None:
         return None
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
-    if isinstance(val, pd.Timestamp):
-        return val.strftime("%Y-%m-%d")
-    try:
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%d-%b-%Y"):
-            try:
-                return datetime.strptime(str(val).strip(), fmt).strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-    except Exception:
-        pass
-    return str(val).strip() if val else None
+    s = str(val).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s

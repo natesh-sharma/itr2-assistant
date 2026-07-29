@@ -16,23 +16,26 @@ def _load_slabs() -> Dict[str, Any]:
 
 def _compute_slab_tax(taxable_income: float, slabs: List[Dict]) -> float:
     tax = 0.0
+    prev_upper = 0
     for slab in slabs:
         lower = slab["from"]
         upper = slab["to"]
         rate = slab["rate"] / 100
 
-        if taxable_income <= 0:
+        if taxable_income <= prev_upper:
             break
 
         if upper is None:
-            tax += max(taxable_income - lower + 1, 0) * rate
-            break
+            taxable_in_slab = max(taxable_income - prev_upper, 0)
+        else:
+            taxable_in_slab = min(taxable_income, upper) - prev_upper
 
-        slab_width = upper - lower + 1
-        taxable_in_slab = min(max(taxable_income - lower + 1, 0), slab_width)
-        tax += taxable_in_slab * rate
+        if taxable_in_slab > 0:
+            tax += taxable_in_slab * rate
 
-    return round(tax, 2)
+        prev_upper = upper if upper else taxable_income
+
+    return round(tax)
 
 
 def _find_surcharge_rate(total_income: float, surcharge_slabs: List[Dict]) -> float:

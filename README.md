@@ -7,7 +7,7 @@ Built with Python + Streamlit. Reads your tax documents, auto-fills schedules, c
 ## Who Is This For?
 
 Salaried individuals who have:
-- Company RSUs/ESPP held via Morgan Stanley, E*Trade, etc.
+- Company RSUs/ESPP held via US brokerages (Morgan Stanley, E*Trade, Schwab, Fidelity)
 - Capital gains from Indian stocks and mutual funds
 - Foreign dividend income (with US tax withheld)
 - Income above Rs 50 lakhs requiring ITR-2
@@ -16,7 +16,7 @@ Salaried individuals who have:
 
 | Feature | Description |
 |---|---|
-| **Document Upload** | Upload Form 16, Form 12BA, broker P&L, Morgan Stanley statement, IRS Form 1042-S — with password-protected PDF support |
+| **Document Upload** | Upload Form 16, Form 12BA, broker P&L, US brokerage statement, IRS Form 1042-S — with password-protected PDF support |
 | **Auto-Fill Schedules** | Salary, Capital Gains (CG + 112A), Other Sources, Foreign Income (FSI), Foreign Assets (FA) |
 | **DTAA Relief** | Automatically computes Section 90 relief for US dividends, guides you through Form 67 filing |
 | **Schedule 112A CSV** | Generates portal-compatible CSV with correct BE/AE codes and non-breaking space headers |
@@ -52,8 +52,8 @@ Open http://localhost:8501 in your browser.
 | Form 16 (Part A & B) | Your employer's HR/payroll portal | Yes |
 | Form 12BA | Your employer (perquisite statement) | Yes (if RSUs) |
 | Tax P&L (Excel) | Zerodha Console / Groww / Angel One | Yes (if stocks/MF) |
-| Morgan Stanley Statement | Morgan Stanley at Work portal | Optional (for Schedule FA) |
-| IRS Form 1042-S | Morgan Stanley at Work portal | Optional (for DTAA relief) |
+| US Brokerage Statement | Morgan Stanley / E*Trade / Schwab / Fidelity portal | Optional (for Schedule FA) |
+| IRS Form 1042-S | Your US brokerage portal (Morgan Stanley, E*Trade, Schwab, Fidelity) | Optional (for DTAA relief) |
 
 ## How It Works
 
@@ -143,7 +143,7 @@ itr2-assistant/
 
 PRs welcome! Areas that need help:
 - Support for more broker P&L formats (Groww, Angel One, ICICI Direct)
-- Support for E*Trade statements (for non-IBM RSU holders)
+- Support for E*Trade statements (for other RSU holders)
 - Improved PDF parsing accuracy
 - Additional tax schedules (House Property, Business Income)
 

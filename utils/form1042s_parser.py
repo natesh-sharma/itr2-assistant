@@ -7,37 +7,57 @@ import pdfplumber
 def parse_1042s(pdf: pdfplumber.PDF) -> Dict[str, Any]:
     text = _extract_full_text(pdf)
 
-    result: Dict[str, Any] = {
-        "income_code": _extract_text_field(text, [
-            r"[Ii]ncome\s+[Cc]ode[:\s]*(\d{2})",
-            r"Box\s*1[:\s]*(\d{2})",
-        ]),
-        "gross_income_usd": _extract_amount(text, [
-            r"[Gg]ross\s+[Ii]ncome.*?\$?\s*(\d[\d,]*\.?\d*)",
-            r"Box\s*2[:\s]*\$?\s*(\d[\d,]*\.?\d*)",
-        ]),
-        "tax_rate": _extract_percentage(text, [
-            r"[Tt]ax\s+[Rr]ate[:\s]*(\d+\.?\d*)\s*%",
-            r"[Rr]ate\s+of\s+[Ww]ithholding[:\s]*(\d+\.?\d*)",
-            r"Box\s*3[a-b]?[:\s]*(\d+\.?\d*)\s*%?",
-        ]),
-        "federal_tax_withheld_usd": _extract_amount(text, [
-            r"[Ff]ederal\s+[Tt]ax\s+[Ww]ithheld.*?\$?\s*(\d[\d,]*\.?\d*)",
-            r"Box\s*7[:\s]*\$?\s*(\d[\d,]*\.?\d*)",
-            r"[Tt]ax\s+[Ww]ithheld.*?\$?\s*(\d[\d,]*\.?\d*)",
-        ]),
-        "recipient_name": _extract_text_field(text, [
-            r"[Rr]ecipient'?s?\s+[Nn]ame[:\s]*(.+?)(?:\n|$)",
-            r"Box\s*13[a-z]?[:\s]*(.+?)(?:\n|$)",
-        ]),
-        "recipient_country": _extract_text_field(text, [
-            r"[Cc]ountry\s+[Cc]ode[:\s]*([A-Z]{2})",
-            r"[Rr]ecipient.*?[Cc]ountry[:\s]*(.+?)(?:\n|$)",
-            r"Box\s*12[a-z]?[:\s]*([A-Z]{2})",
-        ]),
-    }
+    income_code = None
+    gross_income = None
+    tax_rate = None
+    tax_withheld = None
+    recipient_name = None
+    recipient_country = None
 
-    return result
+    # 1042-S has a dense line like "06 360.00 25.00 00.00" for income code, gross, rate
+    # Must match on a single line; line may have trailing data like "16"
+    dense_match = re.search(r"^(\d{2})\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+(\d+\.\d{2})", text, re.MULTILINE)
+    if dense_match:
+        income_code = dense_match.group(1)
+        gross_income = float(dense_match.group(2))
+        tax_rate = float(dense_match.group(3))
+
+    # Federal tax withheld appears as a standalone amount (e.g., "90.00") after the dense line
+    # Look for "Federal tax withheld" label or the value after the dense line
+    fed_match = re.search(r"[Ff]ederal\s+tax\s+withheld.*?(\d+\.?\d*)", text, re.DOTALL)
+    if fed_match:
+        tax_withheld = float(fed_match.group(1))
+    else:
+        amounts = re.findall(r"^(\d+\.\d{2})$", text, re.MULTILINE)
+        for amt in amounts:
+            val = float(amt)
+            if gross_income and 0 < val < gross_income:
+                tax_withheld = val
+                break
+
+    # Recipient name — look for line before country code "IN"
+    name_match = re.search(r"([A-Z][A-Z ]+)\s+IN\b", text)
+    if name_match:
+        recipient_name = name_match.group(1).strip()
+
+    # Recipient country
+    country_match = re.search(r"13b\)?\s*.*?([A-Z]{2})\b", text)
+    if not country_match:
+        country_match = re.search(r"\b(IN)\b.*?(?:India|INDIA)", text)
+    if country_match:
+        recipient_country = country_match.group(1)
+    else:
+        if "India" in text or "INDIA" in text:
+            recipient_country = "IN"
+
+    return {
+        "income_code": income_code,
+        "gross_income_usd": gross_income,
+        "tax_rate": tax_rate,
+        "federal_tax_withheld_usd": tax_withheld,
+        "recipient_name": recipient_name,
+        "recipient_country": recipient_country,
+    }
 
 
 def _extract_full_text(pdf: pdfplumber.PDF) -> str:
@@ -50,38 +70,3 @@ def _extract_full_text(pdf: pdfplumber.PDF) -> str:
         except Exception:
             continue
     return "\n".join(parts)
-
-
-def _extract_amount(text: str, patterns: list) -> Optional[float]:
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            try:
-                raw = match.group(1).replace(",", "").replace("$", "").strip()
-                value = float(raw)
-                if value >= 0:
-                    return value
-            except (ValueError, IndexError):
-                continue
-    return None
-
-
-def _extract_percentage(text: str, patterns: list) -> Optional[float]:
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            try:
-                return float(match.group(1))
-            except (ValueError, IndexError):
-                continue
-    return None
-
-
-def _extract_text_field(text: str, patterns: list) -> Optional[str]:
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            value = match.group(1).strip()
-            if value:
-                return value
-    return None

@@ -16,9 +16,12 @@ def fetch_sbi_rates() -> pd.DataFrame:
     response.raise_for_status()
     df = pd.read_csv(io.StringIO(response.text))
     df.columns = df.columns.str.strip()
-    df["Date"] = pd.to_datetime(df["Date"], format="mixed", dayfirst=False)
-    df["TT_BUY"] = pd.to_numeric(df["TT BUY"], errors="coerce")
+    date_col = "DATE" if "DATE" in df.columns else "Date"
+    tt_col = "TT BUY" if "TT BUY" in df.columns else "TT_BUY"
+    df["Date"] = pd.to_datetime(df[date_col], format="mixed", dayfirst=False)
+    df["TT_BUY"] = pd.to_numeric(df[tt_col], errors="coerce")
     df = df[["Date", "TT_BUY"]].dropna(subset=["TT_BUY"])
+    df = df[df["TT_BUY"] > 0]
     df = df.sort_values("Date").reset_index(drop=True)
     return df
 

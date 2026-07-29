@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.streamlit/
+*.pdf
+*.xlsx
+*.csv
+!data/*.json
+.claude/

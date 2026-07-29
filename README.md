@@ -47,13 +47,30 @@ Open http://localhost:8501 in your browser.
 
 ## Documents You'll Need
 
-| Document | Source | Required? |
+### Required Documents
+
+| Document | Source | Purpose |
 |---|---|---|
-| Form 16 (Part A & B) | Your employer's HR/payroll portal | Yes |
-| Form 12BA | Your employer (perquisite statement) | Yes (if RSUs) |
-| Tax P&L (Excel) | Zerodha Console / Groww / Angel One | Yes (if stocks/MF) |
-| US Brokerage Statement | Morgan Stanley / E*Trade / Schwab / Fidelity portal | Optional (for Schedule FA) |
-| IRS Form 1042-S | Your US brokerage portal (Morgan Stanley, E*Trade, Schwab, Fidelity) | Optional (for DTAA relief) |
+| Form 16 (Part A & B) | Your employer's HR/payroll portal | Salary breakup, TDS details |
+| Form 12BA | Your employer (perquisite statement) | RSU/ESOP perquisite value |
+| Tax P&L (Excel) | Zerodha Console / Groww / Angel One | Capital gains, dividends |
+
+### Verification Documents
+
+| Document | Source | Purpose |
+|---|---|---|
+| AIS (Annual Information Statement) | incometax.gov.in → Services → AIS | Cross-check ALL reported transactions — interest, dividends, stock sales, TDS |
+| TIS (Taxpayer Information Summary) | incometax.gov.in → AIS → View TIS tab | Processed summary — verify totals match your Form 16 and broker P&L |
+| Form 26AS (Tax Credit Statement) | incometax.gov.in → e-File → View Form 26AS | TDS/TCS credits — ITR TDS must match 26AS exactly |
+
+### Foreign Income Documents (Optional)
+
+| Document | Source | Purpose |
+|---|---|---|
+| US Brokerage Statement | Morgan Stanley / E*Trade / Schwab / Fidelity portal | Schedule FA — foreign asset holdings, dividends, RSU details |
+| IRS Form 1042-S | Your US brokerage → Tax Documents | DTAA relief — US tax withheld on dividends, needed for Form 67 |
+
+> **Why AIS/TIS/26AS matter**: If your ITR data doesn't match AIS, you'll get a mismatch notice. Always compare interest and dividend amounts from Form 16 and broker P&L against AIS before filing.
 
 ## How It Works
 

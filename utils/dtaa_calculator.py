@@ -13,7 +13,7 @@ def compute_dtaa_relief(
     return {
         "relief_amount": relief,
         "section": "90",
-        "article": "25",
+        "article": "10",
         "country": country,
         "foreign_income_inr": foreign_income_inr,
         "tax_paid_abroad_inr": tax_paid_abroad_inr,
@@ -66,7 +66,7 @@ def prepare_form67_data(
             "total_tax_inr": round(total_tax_inr, 2),
             "country": "United States of America",
             "country_code": "US",
-            "dtaa_article": "Article 25",
+            "dtaa_article": "Article 10",
             "section": "90",
         },
     }

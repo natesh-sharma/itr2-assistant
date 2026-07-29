@@ -146,7 +146,3 @@ PRs welcome! Areas that need help:
 - Support for E*Trade statements (for other RSU holders)
 - Improved PDF parsing accuracy
 - Additional tax schedules (House Property, Business Income)
-
-## License
-
-MIT
